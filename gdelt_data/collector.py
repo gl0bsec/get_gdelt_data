@@ -1,6 +1,5 @@
 import gdelt
 import pandas as pd
-from datetime import datetime, timedelta
 import time
 import gc
 import os
@@ -148,44 +147,44 @@ def create_filter_function(filter_rules):
     
     return filter_events
 
-# Example filter configuration
-# FILTER_RULES = {
-#     "high_mention_events": {
-#         "rule": "NumMentions greater than or equal 5",
-#         "description": "Keep only events with 5+ mentions",
-#         "enabled": True
-#     },
-#     "has_location": {
-#         "rule": "ActionGeo_Lat is not null",
-#         "description": "Keep only events with geographic coordinates",
-#         "enabled": True
-#     },
-#     "has_actors": {
-#         "rule": "Actor1Name is not null",
-#         "description": "Keep only events with identified actors",
-#         "enabled": True
-#     },
-#     "goldstein_range": {
-#         "rule": "GoldsteinScale between -10 and 10",
-#         "description": "Keep events with moderate Goldstein scale",
-#         "enabled": True
-#     },
-#     "specific_countries": {
-#         "rule": "ActionGeo_CountryCode in [US, UK, FR, DE, CN]",
-#         "description": "Keep only events in specific countries",
-#         "enabled": False  # Disabled by default
-#     },
-#     "exclude_event_types": {
-#         "rule": "EventRootCode not in [20, 21, 22, 23]",
-#         "description": "Exclude certain event types",
-#         "enabled": False
-#     },
-#     "recent_sources": {
-#         "rule": "NumSources greater than 2",
-#         "description": "Keep events with multiple sources",
-#         "enabled": True
-#     }
-# }
+# Default filter configuration used when none is provided.
+DEFAULT_FILTER_RULES = {
+    "high_mention_events": {
+        "rule": "NumMentions greater than or equal 5",
+        "description": "Keep only events with 5+ mentions",
+        "enabled": True,
+    },
+    "has_location": {
+        "rule": "ActionGeo_Lat is not null",
+        "description": "Keep only events with geographic coordinates",
+        "enabled": True,
+    },
+    "has_actors": {
+        "rule": "Actor1Name is not null",
+        "description": "Keep only events with identified actors",
+        "enabled": True,
+    },
+    "goldstein_range": {
+        "rule": "GoldsteinScale between -10 and 10",
+        "description": "Keep events with moderate Goldstein scale",
+        "enabled": True,
+    },
+    "specific_countries": {
+        "rule": "ActionGeo_CountryCode in [US, UK, FR, DE, CN]",
+        "description": "Keep only events in specific countries",
+        "enabled": False,
+    },
+    "exclude_event_types": {
+        "rule": "EventRootCode not in [20, 21, 22, 23]",
+        "description": "Exclude certain event types",
+        "enabled": False,
+    },
+    "recent_sources": {
+        "rule": "NumSources greater than 2",
+        "description": "Keep events with multiple sources",
+        "enabled": True,
+    },
+}
 
 def load_filter_rules_from_file(filepath):
     """Load filter rules from a JSON or YAML file"""
@@ -290,7 +289,7 @@ def collect_gdelt_data(
         if 'filter_rules' in filter_rules:
             filter_rules = filter_rules['filter_rules']
     elif filter_rules is None:
-        filter_rules = FILTER_RULES
+        filter_rules = DEFAULT_FILTER_RULES
     
     # Create filter function
     filter_function = create_filter_function(filter_rules)
@@ -488,39 +487,4 @@ def interactive_filter_builder():
     
     return filters
 
-# Run the interactive builder
-# filters = interactive_filter_builder()
 
-# 1. Basic usage with default filters
-collect_gdelt_data(
-    start_date=datetime(2025, 3, 1),
-    end_date=datetime(2025, 3, 31)
-)
-
-# 2. Custom filters for protest events
-protest_filters = {
-    # "protest_events": {
-    #     "rule": "EventRootCode equals 14",
-    #     "description": "Protest events",
-    #     "enabled": True
-    # },
-    "high_visibility": {
-        "rule": "NumMentions greater than 5",
-        "description": "Highly reported events",
-        "enabled": True
-    }
-}
-
-collect_gdelt_data(
-    start_date=datetime(2025, 3, 1),
-    end_date=datetime(2025, 3, 31),
-    filter_rules=protest_filters,
-    output_file='gdelt_protests_march2025.parquet'
-)
-
-# # 3. Use saved filter configuration
-# collect_gdelt_data(
-#     start_date=datetime(2025, 3, 1),
-#     end_date=datetime(2025, 6, 5),
-#     filter_rules_file='gdelt_filters.yaml'
-# )
