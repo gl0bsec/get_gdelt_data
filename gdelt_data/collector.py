@@ -8,7 +8,11 @@ import yaml
 import re
 
 class FilterRuleParser:
-    """Parse plaintext filter rules into pandas operations"""
+    """Parse plaintext filter rules into operations.
+
+    This helper class converts simple text expressions into tuples that
+    describe how a pandas ``DataFrame`` should be filtered.
+    """
     
     def __init__(self):
         self.operators = {
@@ -28,7 +32,20 @@ class FilterRuleParser:
         }
     
     def parse_rule(self, rule_text):
-        """Parse a single plaintext rule into a filter function"""
+        """Convert a textual rule into its components.
+
+        Parameters
+        ----------
+        rule_text : str
+            A rule of the form ``"column operator value"``.
+
+        Returns
+        -------
+        tuple
+            A tuple ``(column, operator, value)`` where ``column`` is the
+            DataFrame column name, ``operator`` is a string representation of
+            the comparison operator and ``value`` is the parsed value.
+        """
         rule_text = rule_text.strip().lower()
         
         # Pattern for: "column operator value"
@@ -56,7 +73,19 @@ class FilterRuleParser:
         return column.upper(), operator, value
     
     def _parse_value(self, value_text):
-        """Parse value from text"""
+        """Interpret the value portion of a rule.
+
+        Parameters
+        ----------
+        value_text : str
+            The raw text after the operator in a rule.
+
+        Returns
+        -------
+        object
+            The parsed value which can be a single value or a list/tuple for
+            range comparisons.
+        """
         value_text = value_text.strip()
         
         # Check for lists
@@ -72,7 +101,19 @@ class FilterRuleParser:
         return self._parse_single_value(value_text)
     
     def _parse_single_value(self, value):
-        """Parse a single value"""
+        """Parse a single literal from the rule text.
+
+        Parameters
+        ----------
+        value : str
+            Text representing either a numeric or string value.
+
+        Returns
+        -------
+        Union[int, float, str]
+            The value converted to ``int`` or ``float`` when possible,
+            otherwise returned as a trimmed string.
+        """
         value = value.strip().strip('"\'')
         
         # Try to convert to number
@@ -86,7 +127,21 @@ class FilterRuleParser:
             return value
 
 def create_filter_function(filter_rules):
-    """Create a filter function from plaintext rules"""
+    """Build a ``DataFrame`` filtering function from text rules.
+
+    Parameters
+    ----------
+    filter_rules : dict
+        Mapping of rule names to rule configurations. Each rule configuration
+        must contain a ``"rule"`` key with the textual rule and may include a
+        ``"description"`` and ``"enabled"`` flag.
+
+    Returns
+    -------
+    Callable[[pandas.DataFrame], pandas.DataFrame]
+        Function that applies all enabled rules to an input ``DataFrame`` and
+        returns the filtered frame.
+    """
     parser = FilterRuleParser()
     
     def filter_events(df):
@@ -187,7 +242,18 @@ DEFAULT_FILTER_RULES = {
 }
 
 def load_filter_rules_from_file(filepath):
-    """Load filter rules from a JSON or YAML file"""
+    """Load filter rules from a JSON or YAML file.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to a ``.json``, ``.yaml`` or ``.yml`` file containing the rules.
+
+    Returns
+    -------
+    dict
+        Dictionary with the parsed filter rules.
+    """
     if filepath.endswith('.json'):
         with open(filepath, 'r') as f:
             return json.load(f)
@@ -198,7 +264,18 @@ def load_filter_rules_from_file(filepath):
         raise ValueError("Unsupported file format. Use .json or .yaml")
 
 def save_filter_rules_template(filepath='filter_rules_template.yaml'):
-    """Save a template filter rules file"""
+    """Write an example filter configuration to disk.
+
+    Parameters
+    ----------
+    filepath : str, optional
+        File path where the template should be written. Defaults to
+        ``"filter_rules_template.yaml"``.
+
+    Returns
+    -------
+    None
+    """
     template = {
         "filter_rules": {
             "high_mention_events": {
@@ -260,27 +337,33 @@ def collect_gdelt_data(
     batch_size=7,
     sleep_time=0.5
 ):
-    """
-    Collect GDELT data with customizable filters
-    
-    Parameters:
-    -----------
+    """Collect GDELT event records applying optional filters.
+
+    Parameters
+    ----------
     start_date : datetime
-        Start date for data collection
+        First date (inclusive) of the collection window.
     end_date : datetime
-        End date for data collection
-    filter_rules : dict
-        Dictionary of filter rules
-    filter_rules_file : str
-        Path to JSON/YAML file containing filter rules
-    columns_to_keep : list
-        List of columns to keep in the output
-    output_file : str
-        Output parquet file path
-    batch_size : int
-        Number of days to process before saving
-    sleep_time : float
-        Seconds to wait between API calls
+        Last date (inclusive) of the collection window.
+    filter_rules : dict, optional
+        Dictionary containing filter definitions. Ignored if
+        ``filter_rules_file`` is provided.
+    filter_rules_file : str, optional
+        Path to a JSON or YAML file with filter rules.
+    columns_to_keep : list[str], optional
+        Columns to retain from the Events table.
+    output_file : str, optional
+        Destination Parquet file. Defaults to
+        ``"gdelt_events_filtered.parquet"``.
+    batch_size : int, optional
+        Number of days to process before persisting intermediate results.
+    sleep_time : float, optional
+        Seconds to pause between API requests.
+
+    Returns
+    -------
+    None
+        The resulting events are written to ``output_file``.
     """
     
     # Load filter rules
@@ -394,7 +477,18 @@ def collect_gdelt_data(
         print(f"Date range: {final_df['SQLDATE'].min()} to {final_df['SQLDATE'].max()}")
 
 def optimize_dtypes(df):
-    """Optimize DataFrame dtypes to reduce memory usage"""
+    """Downcast numeric columns to more efficient dtypes.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame to optimize in place.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The optimized DataFrame.
+    """
     # [Previous optimize_dtypes function remains the same]
     float_cols = df.select_dtypes(include=['float64']).columns
     for col in float_cols:
@@ -419,7 +513,14 @@ def optimize_dtypes(df):
     return df
 
 def interactive_filter_builder():
-    """Interactive tool to build filter rules"""
+    """Prompt the user for filter rules interactively.
+
+    Returns
+    -------
+    dict
+        Dictionary in the same structure as ``DEFAULT_FILTER_RULES`` which can
+        be passed to :func:`collect_gdelt_data`.
+    """
     filters = {}
     
     print("=== GDELT Filter Builder ===")

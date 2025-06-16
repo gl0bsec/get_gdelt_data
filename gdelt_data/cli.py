@@ -5,11 +5,25 @@ from .collector import collect_gdelt_data
 
 
 def main() -> None:
+    """Entry point for the command line interface.
+
+    This function parses command line arguments and invokes
+    :func:`gdelt_data.collect_gdelt_data` with the provided
+    parameters.
+    """
+
     parser = argparse.ArgumentParser(description="Download GDELT data")
     parser.add_argument("start_date", help="Start date YYYY-MM-DD")
     parser.add_argument("end_date", help="End date YYYY-MM-DD")
-    parser.add_argument("--filters", help="Path to YAML/JSON file with filter rules")
-    parser.add_argument("--output", default="gdelt_events.parquet", help="Output parquet file")
+    parser.add_argument(
+        "--filters",
+        help="Path to YAML/JSON file with filter rules",
+    )
+    parser.add_argument(
+        "--output",
+        default="gdelt_events.parquet",
+        help="Output parquet file",
+    )
     args = parser.parse_args()
 
     start = datetime.fromisoformat(args.start_date)
