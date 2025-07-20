@@ -1,2 +1,23 @@
 __pycache__/
 *.pyc
+
+# Data files - ignore all except text files
+*.parquet
+*.csv
+*.pdf
+*.json
+*.yaml
+*.yml
+*.xlsx
+*.xls
+*.h5
+*.hdf5
+*.pickle
+*.pkl
+
+# Keep text files
+!*.txt
+
+# Project-specific ignores
+CLAUDE.md
+report_generation/
