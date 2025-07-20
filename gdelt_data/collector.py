@@ -380,10 +380,10 @@ def collect_gdelt_data(
     # Default columns if not specified
     if columns_to_keep is None:
         columns_to_keep = [
-            'GLOBALEVENTID', 'SQLDATE', 'Actor1Name', 'Actor2Name',
-            'Actor1CountryCode', 'Actor2CountryCode', 'Actor1Type1Code',
-            'EventCode', 'EventRootCode', 'EventBaseCode', 'GoldsteinScale',
-            'NumMentions', 'NumSources', 'NumArticles', 'AvgTone',
+            'GLOBALEVENTID', 'SQLDATE', 'DATEADDED', 'MonthYear', 'Year', 'FractionDate',
+            'Actor1Name', 'Actor2Name', 'Actor1CountryCode', 'Actor2CountryCode', 
+            'Actor1Type1Code', 'EventCode', 'EventRootCode', 'EventBaseCode', 
+            'GoldsteinScale', 'NumMentions', 'NumSources', 'NumArticles', 'AvgTone',
             'ActionGeo_Lat', 'ActionGeo_Long', 'ActionGeo_CountryCode',
             'ActionGeo_ADM1Code', 'ActionGeo_FullName', 'SOURCEURL'
         ]
