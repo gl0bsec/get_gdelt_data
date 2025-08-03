@@ -9,7 +9,7 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
-
+## Normal URLs version 
 def extract_url_metadata(url: str, timeout: int = 10) -> Dict[str, Optional[str]]:
     """
     Extract metadata from a webpage URL including title, description, and other relevant information.
@@ -110,7 +110,10 @@ def extract_url_metadata(url: str, timeout: int = 10) -> Dict[str, Optional[str]
 
     return metadata
 
+## TODO Add URL content scraper 
 
+
+## Gdelt verison 
 def get_source_urls_with_metadata(df, actor1_code=None, actor2_code=None, geo_code=None,
                                  match_type='any', limit=None, show_events=True,
                                  extract_metadata=False, max_workers=5, delay=1.0,
