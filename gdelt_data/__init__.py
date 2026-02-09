@@ -15,6 +15,7 @@ from .parsing import (
     combine_multiple_columns,
     map_event_codes,
     parse_cameo_codes,
+    convert_dates_to_iso,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "combine_multiple_columns",
     "map_event_codes",
     "parse_cameo_codes",
+    "convert_dates_to_iso",
 ]

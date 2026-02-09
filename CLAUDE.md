@@ -27,6 +27,7 @@ The filter system uses plain English expressions that get parsed into pandas ope
 ### Data Analysis and Parsing
 - **URL Analysis**: `extract_url_metadata()` and `get_source_urls_with_metadata()` extract webpage metadata from GDELT source URLs
 - **Event Code Mapping**: `parse_cameo_codes()` and `map_event_codes()` handle CAMEO event code translations
+- **Date Conversion**: `convert_dates_to_iso()` converts GDELT date formats to ISO 8601 for compatibility with visualization tools like Foursquare Studio
 - **Data Processing**: `combine_multiple_columns()` and `analyze_source_metadata()` provide utilities for data transformation and analysis
 - Uses multithreading for concurrent metadata extraction with configurable delays and timeouts
 
@@ -75,6 +76,10 @@ urls_with_metadata = get_source_urls_with_metadata(df, geo_code='US', extract_me
 from gdelt_data import parse_cameo_codes, map_event_codes
 cameo_dict = parse_cameo_codes('report_generation/CAMEO.eventcodes.txt')
 df_with_descriptions = map_event_codes(df, cameo_dict)
+
+# Convert dates to ISO 8601 format for Foursquare Studio
+from gdelt_data import convert_dates_to_iso
+df_converted = convert_dates_to_iso(df)  # SQLDATE: 20250803 -> 2025-08-03
 ```
 
 ## Key Files
@@ -85,6 +90,47 @@ df_with_descriptions = map_event_codes(df, cameo_dict)
 - `report_generation/country_code_utils.py`: Country code mapping utilities
 - `requirements.txt`: Dependencies (pandas, pyyaml, gdelt, requests, beautifulsoup4)
 
+## Project Structure and Conventions
+
+### Directory Organization
+- **`workflows/`**: Store reusable data collection and analysis workflows here
+  - Workflows should be self-contained Python scripts that can be run with `PYTHONPATH=. python3 workflows/script_name.py`
+  - Example: `workflows/collect_russia_africa.py` collects and filters Russia-Africa events
+
+- **`outputs/`**: All generated output files (CSV, Parquet, KML, etc.) should be saved here
+  - This keeps the project root clean and makes it easy to find generated data
+  - The directory is automatically created by workflows if it doesn't exist
+  - Files in this directory are typically gitignored
+
+- **`gdelt_data/`**: Core library code for data collection
+- **`report_generation/`**: Contains CAMEO and FIPS lookup tables and legacy analysis scripts (being migrated to workflows/)
+
+### Important: Country Codes
+- **GDELT uses FIPS 10-4 country codes, NOT ISO Alpha-2 codes**
+- FIPS codes differ from ISO codes (e.g., GM = Germany in FIPS, not Gambia)
+- Always use `report_generation/FIPS.country.txt` for country code lookups
+- Use the `country_code_utils.py` helper functions for country name mapping
+
+### Adding Event and Country Descriptions
+When creating workflows that output CSV files, always include human-readable descriptions:
+```python
+# Add CAMEO event descriptions
+cameo_dict = parse_cameo_codes('report_generation/CAMEO.eventcodes.txt')
+df = map_event_codes(df, cameo_dict)
+
+# Add FIPS country names
+fips_dict = {}
+with open('report_generation/FIPS.country.txt', 'r') as f:
+    for line in f:
+        parts = line.strip().split('\t')
+        if len(parts) == 2:
+            fips_dict[parts[0]] = parts[1]
+
+df['ActionGeo_CountryName'] = df['ActionGeo_CountryCode'].map(fips_dict)
+df['Actor1CountryName'] = df['Actor1CountryCode'].map(fips_dict)
+df['Actor2CountryName'] = df['Actor2CountryCode'].map(fips_dict)
+```
+
 ## Development Notes
 
 - No test framework is currently configured
@@ -92,3 +138,4 @@ df_with_descriptions = map_event_codes(df, cameo_dict)
 - Memory is actively managed with `gc.collect()` calls for large datasets
 - All filter rules support enabling/disabling via the "enabled" flag
 - Report generation tools expect CAMEO and FIPS lookup files to be present in the report_generation directory
+- Run workflows with `PYTHONPATH=. python3 workflows/script_name.py` to ensure proper imports

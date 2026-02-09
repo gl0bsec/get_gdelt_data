@@ -9,6 +9,13 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    print("Note: Install tqdm for progress bars: pip install tqdm")
+
 ## Normal URLs version 
 def extract_url_metadata(url: str, timeout: int = 10) -> Dict[str, Optional[str]]:
     """
@@ -254,6 +261,7 @@ def get_source_urls_with_metadata(df, actor1_code=None, actor2_code=None, geo_co
         if extract_metadata:
             print(f"Extracting metadata for {len(result_df)} URLs...")
             metadata_results = []
+            urls = result_df['SOURCEURL'].unique()
 
             def extract_with_delay(url):
                 time.sleep(delay)
@@ -261,15 +269,23 @@ def get_source_urls_with_metadata(df, actor1_code=None, actor2_code=None, geo_co
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_url = {executor.submit(extract_with_delay, url): url
-                               for url in result_df['SOURCEURL'].unique()}
+                               for url in urls}
 
-                for future in as_completed(future_to_url):
+                # Use tqdm progress bar if available
+                if TQDM_AVAILABLE:
+                    futures_iter = tqdm(as_completed(future_to_url), total=len(urls),
+                                       desc="Extracting metadata", unit="url")
+                else:
+                    futures_iter = as_completed(future_to_url)
+
+                for future in futures_iter:
                     url = future_to_url[future]
                     try:
                         metadata = future.result()
                         metadata_results.append(metadata)
                     except Exception as exc:
-                        print(f'URL {url} generated an exception: {exc}')
+                        if not TQDM_AVAILABLE:
+                            print(f'URL {url} generated an exception: {exc}')
                         metadata_results.append({'url': url, 'error': str(exc)})
 
             # Convert metadata to DataFrame and merge
@@ -279,6 +295,43 @@ def get_source_urls_with_metadata(df, actor1_code=None, actor2_code=None, geo_co
             # Drop duplicate url column
             if 'url' in result_df.columns:
                 result_df = result_df.drop('url', axis=1)
+
+            # Reorder columns to desired format
+            desired_order = [
+                'first_event_date',
+                'SOURCEURL',
+                'title',
+                'description',
+                'avg_goldstein_score',
+                'min_goldstein_score',
+                'max_goldstein_score',
+                'goldstein_score_std',
+                'event_count',
+                'actor1_names',
+                'actor2_names',
+                'actor1_countries',
+                'actor2_countries',
+                'event_locations',
+                'last_event_date',
+                'event_descriptions',
+                'date_span_days',
+                'keywords',
+                'author',
+                'site_name',
+                'image',
+                'favicon',
+                'canonical_url',
+                'language',
+                'content_type',
+                'status_code',
+                'error'
+            ]
+
+            # Reorder columns - use existing columns in desired order, then append any extras
+            existing_cols = [col for col in desired_order if col in result_df.columns]
+            extra_cols = [col for col in result_df.columns if col not in desired_order]
+            final_order = existing_cols + extra_cols
+            result_df = result_df[final_order]
 
         print(f"Found {len(result_df)} unique URLs from {len(filtered_df)} events")
         return result_df
@@ -318,12 +371,20 @@ def get_source_urls_with_metadata(df, actor1_code=None, actor2_code=None, geo_co
                 futures = [executor.submit(extract_metadata_with_context, row)
                           for _, row in url_events.iterrows()]
 
-                for future in as_completed(futures):
+                # Use tqdm progress bar if available
+                if TQDM_AVAILABLE:
+                    futures_iter = tqdm(as_completed(futures), total=len(futures),
+                                       desc="Extracting metadata", unit="url")
+                else:
+                    futures_iter = as_completed(futures)
+
+                for future in futures_iter:
                     try:
                         result = future.result()
                         results_with_metadata.append(result)
                     except Exception as exc:
-                        print(f'Metadata extraction failed: {exc}')
+                        if not TQDM_AVAILABLE:
+                            print(f'Metadata extraction failed: {exc}')
 
             return results_with_metadata
         else:
@@ -351,12 +412,20 @@ def get_source_urls_with_metadata(df, actor1_code=None, actor2_code=None, geo_co
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [executor.submit(extract_with_delay, url) for url in urls]
 
-                for future in as_completed(futures):
+                # Use tqdm progress bar if available
+                if TQDM_AVAILABLE:
+                    futures_iter = tqdm(as_completed(futures), total=len(futures),
+                                       desc="Extracting metadata", unit="url")
+                else:
+                    futures_iter = as_completed(futures)
+
+                for future in futures_iter:
                     try:
                         result = future.result()
                         results_with_metadata.append(result)
                     except Exception as exc:
-                        print(f'Metadata extraction failed: {exc}')
+                        if not TQDM_AVAILABLE:
+                            print(f'Metadata extraction failed: {exc}')
 
             return results_with_metadata
         else:
@@ -449,42 +518,73 @@ def combine_multiple_columns(df, column_names, new_col_name='combined_text',
 def map_event_codes(df, event_dict, verbose=True):
     """
     Maps event codes to descriptions and cleans the EventCode column.
-    
+
     Parameters:
     df (DataFrame): DataFrame containing EventCode column
     event_dict (dict): Dictionary mapping event codes to descriptions
     verbose (bool): Whether to print diagnostic information
-    
+
     Returns:
     DataFrame: DataFrame with cleaned EventCode and new EventDescription column
     """
     # Create a copy to avoid modifying original
     result_df = df.copy()
-    
+
     # Clean and convert EventCode to string
     if result_df['EventCode'].dtype in ['int64', 'int32', 'float64']:
         result_df['EventCode'] = result_df['EventCode'].astype(int).astype(str)
     else:
         result_df['EventCode'] = result_df['EventCode'].astype(str).str.strip()
-    
+
     if verbose:
         # Diagnostic information
         print(f"\nEventCode data type: {result_df['EventCode'].dtype}")
         print("Sample EventCodes from your data:")
         print(result_df['EventCode'].value_counts().head())
-        
-        # Check if codes exist in dictionary
-        print("\nChecking if your codes exist in the dictionary:")
-        unique_codes = result_df['EventCode'].unique()[:10]
-        for code in unique_codes:
-            if code in event_dict:
-                print(f"Code '{code}': Found - {event_dict[code]}")
-            else:
-                print(f"Code '{code}': NOT FOUND")
-    
-    # Map the event descriptions
-    result_df['EventDescription'] = result_df['EventCode'].map(event_dict)
-    
+
+    # Create a mapping function that tries multiple formats
+    def map_code(code):
+        # Try exact match first
+        if code in event_dict:
+            return event_dict[code]
+
+        # Try zero-padding for short codes
+        # Pad 1-digit codes to 2 digits (e.g., '1' -> '01')
+        if len(code) == 1 and code.isdigit():
+            padded = code.zfill(2)
+            if padded in event_dict:
+                return event_dict[padded]
+
+        # Pad 2-digit codes to 3 digits (e.g., '42' -> '042')
+        if len(code) == 2 and code.isdigit():
+            padded = code.zfill(3)
+            if padded in event_dict:
+                return event_dict[padded]
+
+        # Pad 3-digit codes to 4 digits (e.g., '182' -> '0182')
+        if len(code) == 3 and code.isdigit():
+            padded = code.zfill(4)
+            if padded in event_dict:
+                return event_dict[padded]
+
+        return None
+
+    # Map the event descriptions with intelligent padding
+    result_df['EventDescription'] = result_df['EventCode'].apply(map_code)
+
+    if verbose:
+        # Show mapping success rate
+        mapped_count = result_df['EventDescription'].notna().sum()
+        total_count = len(result_df)
+        print(f"\nMapping success: {mapped_count}/{total_count} ({mapped_count/total_count*100:.1f}%)")
+
+        # Show sample unmapped codes
+        unmapped = result_df[result_df['EventDescription'].isna()]['EventCode'].value_counts().head(5)
+        if len(unmapped) > 0:
+            print("\nTop unmapped codes:")
+            for code, count in unmapped.items():
+                print(f"  Code '{code}': {count} occurrences")
+
     return result_df
 
 def parse_cameo_codes(file_path):
@@ -525,3 +625,61 @@ def parse_cameo_codes(file_path):
                 event_dict[code] = description
 
     return event_dict
+
+
+def convert_dates_to_iso(df, inplace=False):
+    """
+    Convert GDELT date columns (SQLDATE, DATEADDED) to ISO 8601 format for compatibility
+    with Foursquare Studio and other visualization tools.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with GDELT date columns
+    inplace : bool
+        If True, modify the DataFrame in place. Otherwise return a copy (default: False)
+
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with converted date columns in ISO 8601 format
+
+    Examples:
+    ---------
+    >>> df_converted = convert_dates_to_iso(df)
+    >>> # SQLDATE: 20250803 -> 2025-08-03
+    >>> # DATEADDED: 20250803063000 -> 2025-08-03 06:30:00 (if full datetime available)
+    """
+    if not inplace:
+        df = df.copy()
+
+    # Convert SQLDATE (YYYYMMDD format) to ISO 8601 date
+    if 'SQLDATE' in df.columns:
+        df['SQLDATE'] = pd.to_datetime(
+            df['SQLDATE'].astype(str),
+            format='%Y%m%d',
+            errors='coerce'
+        ).dt.strftime('%Y-%m-%d')
+
+    # Convert DATEADDED (YYYYMMDD or YYYYMMDDHHMMSS format) to ISO 8601
+    if 'DATEADDED' in df.columns:
+        # Check the length of the date string to determine format
+        date_str = df['DATEADDED'].astype(str)
+        max_len = date_str.str.len().max()
+
+        if max_len > 8:
+            # Full datetime format (YYYYMMDDHHMMSS)
+            df['DATEADDED'] = pd.to_datetime(
+                date_str,
+                format='%Y%m%d%H%M%S',
+                errors='coerce'
+            ).dt.strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            # Date only format (YYYYMMDD)
+            df['DATEADDED'] = pd.to_datetime(
+                date_str,
+                format='%Y%m%d',
+                errors='coerce'
+            ).dt.strftime('%Y-%m-%d')
+
+    return df
