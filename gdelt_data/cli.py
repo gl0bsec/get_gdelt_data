@@ -2,12 +2,17 @@ import argparse
 import textwrap
 from datetime import datetime
 
+import pandas as pd
+
 from .collector import (
     collect_gdelt_data,
     save_filter_rules_template,
     interactive_filter_builder,
     DEFAULT_FILTER_RULES,
 )
+from .enrich import add_event_descriptions, add_country_names, filter_by_country
+from .export import to_kml
+from .parsing import get_source_urls_with_metadata
 
 
 EXTENDED_HELP = textwrap.dedent("""\
@@ -21,12 +26,18 @@ EXTENDED_HELP = textwrap.dedent("""\
       filtering, and output to Parquet format.
 
     BASIC USAGE
-      python -m gdelt_data 2024-01-01 2024-01-07
-      python -m gdelt_data 2024-01-01 2024-01-07 --output events.parquet
-      python -m gdelt_data 2024-01-01 2024-01-07 --filters my_rules.yaml
+      python -m gdelt_data collect 2024-01-01 2024-01-07
+      python -m gdelt_data collect 2024-01-01 2024-01-07 -o events.parquet
+      python -m gdelt_data filter events.parquet ML -o mali.csv
+      python -m gdelt_data enrich mali.csv -o mali_enriched.csv
+      python -m gdelt_data kml mali_enriched.csv -o mali.kml
 
     SUBCOMMANDS
       collect (default)   Download and filter GDELT events for a date range.
+      filter              Filter an existing dataset by country code.
+      enrich              Add event descriptions and country names.
+      extract-urls        Extract metadata from GDELT source URLs.
+      kml                 Export events to KML for Google Earth.
       template            Generate a sample filter-rules YAML file.
       filters             Show the current default filter rules.
       columns             List the default columns retained in the output.
@@ -47,6 +58,36 @@ EXTENDED_HELP = textwrap.dedent("""\
         --batch-size N      Days to accumulate before flushing to disk (default: 7).
         --sleep SECONDS     Delay between API requests (default: 0.5).
         --no-filter         Disable all filtering; collect raw events.
+
+    ─── FILTER ─────────────────────────────────────────────────────
+      Filters an existing Parquet or CSV file to a single country and
+      exports the result as CSV.  Dates are converted to ISO-8601.
+
+      python -m gdelt_data filter events.parquet ML -o mali.csv
+      python -m gdelt_data filter events.csv US -o us_events.csv
+
+    ─── ENRICH ─────────────────────────────────────────────────────
+      Adds CAMEO event descriptions and/or FIPS/CAMEO country names to
+      an existing CSV file.
+
+      python -m gdelt_data enrich events.csv -o enriched.csv
+      python -m gdelt_data enrich events.csv -o enriched.csv --no-descriptions
+      python -m gdelt_data enrich events.csv -o enriched.csv --no-country-names
+
+    ─── EXTRACT-URLS ───────────────────────────────────────────────
+      Scrapes metadata (title, description, author, etc.) from the
+      SOURCEURL column.  Supports concurrency and rate limiting.
+
+      python -m gdelt_data extract-urls events.csv -o urls.csv
+      python -m gdelt_data extract-urls events.csv -o urls.csv --workers 8 --delay 0.5
+
+    ─── KML ────────────────────────────────────────────────────────
+      Exports events with coordinates to KML for Google Earth.  Placemarks
+      are styled by Goldstein score (red=negative, green=positive).
+
+      python -m gdelt_data kml events.csv -o events.kml
+      python -m gdelt_data kml events.csv -o events.kml --max-goldstein 0
+      python -m gdelt_data kml events.csv -o events.kml --min-goldstein -10 --max-goldstein -2
 
     ─── TEMPLATE ───────────────────────────────────────────────────
       Writes an example filter-rules YAML file with annotated examples.
@@ -155,15 +196,37 @@ EXTENDED_HELP = textwrap.dedent("""\
       # Show default filters
       python -m gdelt_data filters
 
-    ─── PYTHON LIBRARY USAGE ───────────────────────────────────────
-      from gdelt_data import collect_gdelt_data
-      from datetime import datetime
+      # Filter collected data to Mali
+      python -m gdelt_data filter events.parquet ML -o mali.csv
 
+      # Add event descriptions and country names
+      python -m gdelt_data enrich mali.csv -o mali_enriched.csv
+
+      # Extract article metadata from source URLs
+      python -m gdelt_data extract-urls mali.csv -o mali_urls.csv
+
+      # Export to KML (negative events only)
+      python -m gdelt_data kml mali_enriched.csv -o mali.kml --max-goldstein 0
+
+    ─── PYTHON LIBRARY USAGE ───────────────────────────────────────
+      from gdelt_data import collect_gdelt_data, filter_by_country
+      from gdelt_data import add_event_descriptions, add_country_names, to_kml
+      from datetime import datetime
+      import pandas as pd
+
+      # Collect
       collect_gdelt_data(
           start_date=datetime(2024, 1, 1),
           end_date=datetime(2024, 1, 7),
           output_file="events.parquet",
       )
+
+      # Filter, enrich, export
+      df = pd.read_parquet("events.parquet")
+      mali = filter_by_country(df, "ML")
+      mali = add_event_descriptions(mali)
+      mali = add_country_names(mali)
+      to_kml(mali, "mali.kml", max_goldstein=0)
 
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """)
@@ -265,6 +328,68 @@ def _cmd_operators(_args):
         print()
 
 
+def _cmd_filter(args):
+    """Run the filter subcommand."""
+    if args.input_file.endswith(".parquet"):
+        df = pd.read_parquet(args.input_file)
+    else:
+        df = pd.read_csv(args.input_file)
+
+    print(f"Loaded {len(df):,} events from {args.input_file}")
+    filtered = filter_by_country(df, args.country_code.upper())
+    filtered.to_csv(args.output, index=False)
+    print(f"Wrote {len(filtered):,} events for {args.country_code.upper()} -> {args.output}")
+
+
+def _cmd_enrich(args):
+    """Run the enrich subcommand."""
+    df = pd.read_csv(args.input_file)
+    print(f"Loaded {len(df):,} events from {args.input_file}")
+
+    if not args.no_descriptions:
+        df = add_event_descriptions(df, verbose=True)
+    if not args.no_country_names:
+        df = add_country_names(df)
+
+    df.to_csv(args.output, index=False)
+    print(f"Enriched data written to {args.output}")
+
+
+def _cmd_extract_urls(args):
+    """Run the extract-urls subcommand."""
+    df = pd.read_csv(args.input_file)
+    print(f"Loaded {len(df):,} events from {args.input_file}")
+
+    result = get_source_urls_with_metadata(
+        df,
+        extract_metadata=True,
+        dataF=True,
+        max_workers=args.workers,
+        delay=args.delay,
+        timeout=args.timeout,
+    )
+
+    if isinstance(result, pd.DataFrame):
+        result.to_csv(args.output, index=False)
+        print(f"URL metadata written to {args.output} ({len(result):,} rows)")
+    else:
+        print("No results returned.")
+
+
+def _cmd_kml(args):
+    """Run the kml subcommand."""
+    df = pd.read_csv(args.input_file)
+    print(f"Loaded {len(df):,} events from {args.input_file}")
+
+    to_kml(
+        df,
+        args.output,
+        min_goldstein=args.min_goldstein,
+        max_goldstein=args.max_goldstein,
+        exclude_no_coords=not args.include_no_coords,
+    )
+
+
 def main() -> None:
     """Entry point for the command line interface."""
 
@@ -352,6 +477,103 @@ def main() -> None:
         help='Show all supported filter operators with examples.',
     )
 
+    # ── filter ─────────────────────────────────────────────────
+    filter_parser = subparsers.add_parser(
+        'filter',
+        help='Filter events by country code and export to CSV.',
+    )
+    filter_parser.add_argument('input_file', help='Input Parquet or CSV file.')
+    filter_parser.add_argument('country_code', help='FIPS country code (e.g. ML, US).')
+    filter_parser.add_argument(
+        '--output', '-o',
+        default='filtered_events.csv',
+        help='Output CSV file (default: filtered_events.csv).',
+    )
+
+    # ── enrich ─────────────────────────────────────────────────
+    enrich_parser = subparsers.add_parser(
+        'enrich',
+        help='Add event descriptions and country names to a CSV.',
+    )
+    enrich_parser.add_argument('input_file', help='Input CSV file.')
+    enrich_parser.add_argument(
+        '--output', '-o',
+        default='enriched_events.csv',
+        help='Output CSV file (default: enriched_events.csv).',
+    )
+    enrich_parser.add_argument(
+        '--no-descriptions',
+        action='store_true',
+        default=False,
+        help='Skip adding CAMEO event descriptions.',
+    )
+    enrich_parser.add_argument(
+        '--no-country-names',
+        action='store_true',
+        default=False,
+        help='Skip adding country name columns.',
+    )
+
+    # ── extract-urls ───────────────────────────────────────────
+    urls_parser = subparsers.add_parser(
+        'extract-urls',
+        help='Extract metadata from GDELT source URLs.',
+    )
+    urls_parser.add_argument('input_file', help='Input CSV file with SOURCEURL column.')
+    urls_parser.add_argument(
+        '--output', '-o',
+        default='urls_metadata.csv',
+        help='Output CSV file (default: urls_metadata.csv).',
+    )
+    urls_parser.add_argument(
+        '--workers',
+        type=int,
+        default=4,
+        help='Concurrent download threads (default: 4).',
+    )
+    urls_parser.add_argument(
+        '--delay',
+        type=float,
+        default=1.0,
+        help='Seconds between requests per thread (default: 1).',
+    )
+    urls_parser.add_argument(
+        '--timeout',
+        type=int,
+        default=10,
+        help='Request timeout in seconds (default: 10).',
+    )
+
+    # ── kml ────────────────────────────────────────────────────
+    kml_parser = subparsers.add_parser(
+        'kml',
+        help='Export events to KML for Google Earth.',
+    )
+    kml_parser.add_argument('input_file', help='Input CSV file with GDELT events.')
+    kml_parser.add_argument(
+        '--output', '-o',
+        default='events.kml',
+        help='Output KML file (default: events.kml).',
+    )
+    kml_parser.add_argument(
+        '--min-goldstein',
+        type=float,
+        default=None,
+        help='Minimum Goldstein score (inclusive).',
+    )
+    kml_parser.add_argument(
+        '--max-goldstein',
+        type=float,
+        default=None,
+        help='Maximum Goldstein score (inclusive).',
+    )
+    kml_parser.add_argument(
+        '--include-no-coords',
+        action='store_true',
+        default=False,
+        help='Include events without coordinates.',
+    )
+
     args = parser.parse_args()
 
     # --help-all prints the extended manual
@@ -371,6 +593,10 @@ def main() -> None:
         'filters': _cmd_filters,
         'columns': _cmd_columns,
         'operators': _cmd_operators,
+        'filter': _cmd_filter,
+        'enrich': _cmd_enrich,
+        'extract-urls': _cmd_extract_urls,
+        'kml': _cmd_kml,
     }
     dispatch[args.command](args)
 
