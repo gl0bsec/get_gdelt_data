@@ -5,7 +5,7 @@ A Python toolkit for fetching, filtering, enriching, and exporting [GDELT](https
 ## Features
 
 - **Collect** events from the GDELT Events table for any date range
-- **Filter** by country code, text rules (YAML/JSON), or custom criteria
+- **Filter** during collection with reusable plain-English rules (YAML/JSON) compiled to pandas queries, or post-hoc by country code
 - **Enrich** with CAMEO event descriptions and human-readable country names
 - **Extract** article metadata (title, author, description) from source URLs
 - **Export** to KML for Google Earth with Goldstein-scored placemarks
@@ -104,20 +104,47 @@ fips = load_fips_dict()  # {"US": "United States", "GM": "Germany", ...}
 
 ### Filter rules
 
-Filter rules use plain English syntax:
+Rules are plain-English expressions of the form `<Column> <operator> <value>`. At collection time each rule is compiled to a pandas `DataFrame.query()` expression and applied to every day's events.
 
 ```
 NumMentions greater than or equal 5
 ActionGeo_CountryCode in [US, UK, FR]
 GoldsteinScale between -5 and 5
 Actor1Name contains protest
-ActionGeo_Lat is not null _
+ActionGeo_Lat is not null
 ```
 
-Create a template and customize it:
+Supported operators: `greater than`, `greater than or equal`, `less than`, `less than or equal`, `equals`, `not equals`, `contains`, `not contains`, `in`, `not in`, `is null`, `is not null`, `between … and …`. Run `python -m gdelt_data operators` for an example of each.
+
+Rules live in reusable YAML (or JSON) files. Each rule has a name, the `rule` text, and an `enabled` flag:
+
+```yaml
+filter_rules:
+  high_mentions:
+    rule: "NumMentions greater than or equal 5"
+    enabled: true
+  sahel:
+    rule: "ActionGeo_CountryCode in [ML, BF, NG]"
+    enabled: false
+```
+
+Generate a starter file, then reuse it across runs:
 
 ```bash
 python -m gdelt_data template -o my_filters.yaml
+python -m gdelt_data collect 2024-01-01 2024-01-07 -f my_filters.yaml -o events.parquet
+```
+
+The same file can be passed from Python, or rules supplied inline:
+
+```python
+collect_gdelt_data(
+    start_date=datetime(2024, 1, 1),
+    end_date=datetime(2024, 1, 7),
+    filter_rules_file="my_filters.yaml",   # or filter_rules={...}
+    output_file="events.parquet",
+)
+# Omit both to use the built-in defaults; pass filter_rules={} for raw, unfiltered data.
 ```
 
 Or build filters interactively in Python:
@@ -165,7 +192,8 @@ The full FIPS lookup table is bundled with the package and available via `load_f
 
 ```
 gdelt_data/              # Core package
-  collector.py           # Data collection and filter engine
+  __main__.py            # `python -m gdelt_data` entry point
+  collector.py           # Data collection and query-based filter engine
   cli.py                 # CLI with subcommands
   parsing.py             # URL extraction, CAMEO parsing, dates
   country_codes.py       # FIPS/CAMEO loaders, ISO-3 <-> FIPS

@@ -14,7 +14,8 @@ This is a Python utility for collecting, filtering, enriching, and exporting GDE
 
 ### Package Modules
 
-- **`gdelt_data/collector.py`**: Data collection engine. Downloads GDELT v1 events day-by-day in configurable batches, applies text-based filter rules, writes Parquet output.
+- **`gdelt_data/__main__.py`**: Entry point that wires the CLI to `python -m gdelt_data ...`.
+- **`gdelt_data/collector.py`**: Data collection engine. Downloads GDELT v1 events day-by-day in configurable batches, compiles text filter rules to pandas `query()` expressions and applies them, writes Parquet output.
 - **`gdelt_data/parsing.py`**: URL metadata extraction (`extract_url_metadata`, `get_source_urls_with_metadata`), CAMEO event code parsing (`parse_cameo_codes`, `map_event_codes`), date conversion (`convert_dates_to_iso`), and data utilities.
 - **`gdelt_data/country_codes.py`**: Loads FIPS and CAMEO/ISO-3 lookup tables from bundled txt files. Builds ISO-3 to FIPS mapping dynamically by matching country names across the two files. Provides `iso3_to_fips()`, `fips_to_iso3()`, `map_country_names()`, and dict loaders.
 - **`gdelt_data/enrich.py`**: DataFrame enrichment — `add_event_descriptions()`, `add_country_names()`, `filter_by_country()`.
@@ -25,15 +26,18 @@ This is a Python utility for collecting, filtering, enriching, and exporting GDE
 ### Data Collection Flow
 - `gdelt_data.collector.collect_gdelt_data()` is the main entry point
 - Uses the `gdelt` Python library to fetch raw data in batches (default 7 days)
-- `FilterRuleParser` converts human-readable filter rules into pandas operations
+- `FilterRuleParser.parse_rule()` splits a rule into `(column, operator, value)`; `rule_to_query()` turns that into a pandas `query()` fragment
 - Filters are defined in YAML/JSON with rules like "NumMentions greater than or equal 5"
 - `DEFAULT_FILTER_RULES` in collector.py defines sensible defaults for high-quality events
 - Output is saved as Parquet files for efficient storage and analysis
 
 ### Filter System
-The filter system uses plain English expressions that get parsed into pandas operations:
-- `"NumMentions greater than or equal 5"` → `df[df['NumMentions'] >= 5]`
-- `"ActionGeo_CountryCode in [US, UK, FR]"` → `df[df['ActionGeo_CountryCode'].isin(['US', 'UK', 'FR'])]`
+The filter system uses plain-English expressions of the form `<Column> <operator> <value>`. Each rule is compiled to a pandas `DataFrame.query()` expression and applied with `df.query(expr, engine='python')`:
+- `"NumMentions greater than or equal 5"` → `NumMentions >= 5`
+- `"ActionGeo_CountryCode in [US, UK, FR]"` → `ActionGeo_CountryCode in ['US', 'UK', 'FR']`
+- `"Actor1Name contains protest"` → `Actor1Name.str.contains('protest', case=False, na=False)`
+
+Each rule is a mapping with a `rule` string and an optional `enabled` flag (defaults to `True`); rule names are free-form. Column names keep their original case, and string operands are auto-quoted. `is null` / `is not null` take no operand (a trailing placeholder is tolerated for backward compatibility but ignored). Unparseable rules and missing columns are logged and skipped rather than aborting the run.
 
 ### Country Code System
 - GDELT uses **two different code systems**: FIPS 10-4 for geography fields (`ActionGeo_CountryCode`) and CAMEO/ISO-3 for actor fields (`Actor1CountryCode`, `Actor2CountryCode`)
@@ -113,7 +117,8 @@ fips = load_fips_dict()  # {"US": "United States", ...}
 
 ## Key Files
 
-- `gdelt_data/collector.py`: Data collection and filter system
+- `gdelt_data/__main__.py`: `python -m gdelt_data` entry point (delegates to `cli.main`)
+- `gdelt_data/collector.py`: Data collection and query-based filter system (`FilterRuleParser`, `rule_to_query`, `create_filter_function`)
 - `gdelt_data/cli.py`: CLI with subcommands (collect, filter, enrich, extract-urls, kml, template, filters, columns, operators)
 - `gdelt_data/parsing.py`: URL metadata extraction, CAMEO parsing, date conversion
 - `gdelt_data/country_codes.py`: Country code loading and ISO-3 ↔ FIPS conversion

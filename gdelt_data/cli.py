@@ -60,26 +60,29 @@ EXTENDED_HELP = textwrap.dedent("""\
         --no-filter         Disable all filtering; collect raw events.
 
     ─── FILTER ─────────────────────────────────────────────────────
-      Filters an existing Parquet or CSV file to a single country and
-      exports the result as CSV.  Dates are converted to ISO-8601.
+      Filters an existing dataset to a single country.  Input and output
+      may each be CSV, Parquet, or NDJSON (chosen by file extension).
+      Dates are converted to ISO-8601.
 
       python -m gdelt_data filter events.parquet ML -o mali.csv
-      python -m gdelt_data filter events.csv US -o us_events.csv
+      python -m gdelt_data filter events.parquet ML -o mali.parquet
+      python -m gdelt_data filter events.csv US -o us_events.ndjson
 
     ─── ENRICH ─────────────────────────────────────────────────────
-      Adds CAMEO event descriptions and/or FIPS/CAMEO country names to
-      an existing CSV file.
+      Adds CAMEO event descriptions and/or FIPS/CAMEO country names.
+      Input and output may each be CSV, Parquet, or NDJSON.
 
       python -m gdelt_data enrich events.csv -o enriched.csv
+      python -m gdelt_data enrich events.parquet -o enriched.parquet
       python -m gdelt_data enrich events.csv -o enriched.csv --no-descriptions
-      python -m gdelt_data enrich events.csv -o enriched.csv --no-country-names
 
     ─── EXTRACT-URLS ───────────────────────────────────────────────
       Scrapes metadata (title, description, author, etc.) from the
       SOURCEURL column.  Supports concurrency and rate limiting.
+      Input and output may each be CSV, Parquet, or NDJSON.
 
       python -m gdelt_data extract-urls events.csv -o urls.csv
-      python -m gdelt_data extract-urls events.csv -o urls.csv --workers 8 --delay 0.5
+      python -m gdelt_data extract-urls events.csv -o urls.parquet --workers 8 --delay 0.5
 
     ─── KML ────────────────────────────────────────────────────────
       Exports events with coordinates to KML for Google Earth.  Placemarks
@@ -166,11 +169,16 @@ EXTENDED_HELP = textwrap.dedent("""\
         report_generation/FIPS.country.txt
 
     ─── OUTPUT FORMAT ──────────────────────────────────────────────
-      Data is saved as Apache Parquet with Snappy compression. Numeric
-      columns are downcast to minimize file size. To read the output:
+      'collect' always writes Apache Parquet with Snappy compression, with
+      numeric columns downcast to minimize file size. To read the output:
 
         import pandas as pd
         df = pd.read_parquet("gdelt_events.parquet")
+
+      The 'filter', 'enrich', and 'extract-urls' subcommands choose their
+      format from the output file extension: .csv (default), .parquet, or
+      .ndjson / .jsonl (newline-delimited JSON). Inputs are detected the
+      same way, so steps can be chained in any of these formats.
 
     ─── EXAMPLES ───────────────────────────────────────────────────
       # Collect one week with default filters
@@ -269,6 +277,33 @@ FILTER_OPERATORS = {
 }
 
 
+def _read_table(path):
+    """Read a DataFrame, choosing the reader from the file extension.
+
+    Supports ``.parquet``, ``.ndjson``/``.jsonl`` (newline-delimited JSON),
+    and CSV (the default for any other extension).
+    """
+    if path.endswith(".parquet"):
+        return pd.read_parquet(path)
+    if path.endswith(".ndjson") or path.endswith(".jsonl"):
+        return pd.read_json(path, orient="records", lines=True)
+    return pd.read_csv(path)
+
+
+def _write_table(df, path):
+    """Write a DataFrame, choosing the format from the file extension.
+
+    ``.parquet`` writes Snappy-compressed Parquet, ``.ndjson``/``.jsonl``
+    writes newline-delimited JSON, and any other extension writes CSV.
+    """
+    if path.endswith(".parquet"):
+        df.to_parquet(path, index=False)
+    elif path.endswith(".ndjson") or path.endswith(".jsonl"):
+        df.to_json(path, orient="records", lines=True)
+    else:
+        df.to_csv(path, index=False)
+
+
 def _cmd_collect(args):
     """Run the collect subcommand."""
     start = datetime.fromisoformat(args.start_date)
@@ -326,20 +361,17 @@ def _cmd_operators(_args):
 
 def _cmd_filter(args):
     """Run the filter subcommand."""
-    if args.input_file.endswith(".parquet"):
-        df = pd.read_parquet(args.input_file)
-    else:
-        df = pd.read_csv(args.input_file)
+    df = _read_table(args.input_file)
 
     print(f"Loaded {len(df):,} events from {args.input_file}")
     filtered = filter_by_country(df, args.country_code.upper())
-    filtered.to_csv(args.output, index=False)
+    _write_table(filtered, args.output)
     print(f"Wrote {len(filtered):,} events for {args.country_code.upper()} -> {args.output}")
 
 
 def _cmd_enrich(args):
     """Run the enrich subcommand."""
-    df = pd.read_csv(args.input_file)
+    df = _read_table(args.input_file)
     print(f"Loaded {len(df):,} events from {args.input_file}")
 
     if not args.no_descriptions:
@@ -347,13 +379,13 @@ def _cmd_enrich(args):
     if not args.no_country_names:
         df = add_country_names(df)
 
-    df.to_csv(args.output, index=False)
+    _write_table(df, args.output)
     print(f"Enriched data written to {args.output}")
 
 
 def _cmd_extract_urls(args):
     """Run the extract-urls subcommand."""
-    df = pd.read_csv(args.input_file)
+    df = _read_table(args.input_file)
     print(f"Loaded {len(df):,} events from {args.input_file}")
 
     result = get_source_urls_with_metadata(
@@ -366,7 +398,7 @@ def _cmd_extract_urls(args):
     )
 
     if isinstance(result, pd.DataFrame):
-        result.to_csv(args.output, index=False)
+        _write_table(result, args.output)
         print(f"URL metadata written to {args.output} ({len(result):,} rows)")
     else:
         print("No results returned.")
@@ -374,7 +406,7 @@ def _cmd_extract_urls(args):
 
 def _cmd_kml(args):
     """Run the kml subcommand."""
-    df = pd.read_csv(args.input_file)
+    df = _read_table(args.input_file)
     print(f"Loaded {len(df):,} events from {args.input_file}")
 
     to_kml(
@@ -476,26 +508,28 @@ def main() -> None:
     # ── filter ─────────────────────────────────────────────────
     filter_parser = subparsers.add_parser(
         'filter',
-        help='Filter events by country code and export to CSV.',
+        help='Filter events by country code and export (CSV/Parquet/NDJSON).',
     )
-    filter_parser.add_argument('input_file', help='Input Parquet or CSV file.')
+    filter_parser.add_argument('input_file', help='Input CSV, Parquet, or NDJSON file.')
     filter_parser.add_argument('country_code', help='FIPS country code (e.g. ML, US).')
     filter_parser.add_argument(
         '--output', '-o',
         default='filtered_events.csv',
-        help='Output CSV file (default: filtered_events.csv).',
+        help='Output file; format inferred from extension '
+             '(.csv, .parquet, .ndjson/.jsonl). Default: filtered_events.csv.',
     )
 
     # ── enrich ─────────────────────────────────────────────────
     enrich_parser = subparsers.add_parser(
         'enrich',
-        help='Add event descriptions and country names to a CSV.',
+        help='Add event descriptions and country names (CSV/Parquet/NDJSON).',
     )
-    enrich_parser.add_argument('input_file', help='Input CSV file.')
+    enrich_parser.add_argument('input_file', help='Input CSV, Parquet, or NDJSON file.')
     enrich_parser.add_argument(
         '--output', '-o',
         default='enriched_events.csv',
-        help='Output CSV file (default: enriched_events.csv).',
+        help='Output file; format inferred from extension '
+             '(.csv, .parquet, .ndjson/.jsonl). Default: enriched_events.csv.',
     )
     enrich_parser.add_argument(
         '--no-descriptions',
@@ -515,11 +549,12 @@ def main() -> None:
         'extract-urls',
         help='Extract metadata from GDELT source URLs.',
     )
-    urls_parser.add_argument('input_file', help='Input CSV file with SOURCEURL column.')
+    urls_parser.add_argument('input_file', help='Input CSV, Parquet, or NDJSON file with SOURCEURL column.')
     urls_parser.add_argument(
         '--output', '-o',
         default='urls_metadata.csv',
-        help='Output CSV file (default: urls_metadata.csv).',
+        help='Output file; format inferred from extension '
+             '(.csv, .parquet, .ndjson/.jsonl). Default: urls_metadata.csv.',
     )
     urls_parser.add_argument(
         '--workers',
