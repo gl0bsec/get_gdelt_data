@@ -43,34 +43,34 @@ class FilterRuleParser:
         -------
         tuple
             A tuple ``(column, operator, value)`` where ``column`` is the
-            DataFrame column name, ``operator`` is a string representation of
-            the comparison operator and ``value`` is the parsed value.
+            DataFrame column name (preserving its original case), ``operator``
+            is a string representation of the comparison operator and ``value``
+            is the parsed value (``None`` for null checks).
         """
-        rule_text = rule_text.strip().lower()
-        
-        # Pattern for: "column operator value"
-        pattern = r'(\w+)\s+(.*?)\s+(.+?)$'
-        match = re.match(pattern, rule_text)
-        
-        if not match:
-            raise ValueError(f"Could not parse rule: {rule_text}")
-        
-        column, operator_text, value_text = match.groups()
-        
-        # Find matching operator
-        operator = None
-        for op_key, op_val in self.operators.items():
-            if op_key in operator_text:
-                operator = op_val
-                break
-        
-        if not operator:
-            raise ValueError(f"Unknown operator in rule: {rule_text}")
-        
-        # Parse value
-        value = self._parse_value(value_text)
-        
-        return column.upper(), operator, value
+        text = rule_text.strip()
+
+        # Match the longest operator phrase first so that e.g.
+        # "greater than or equal" is preferred over "greater than", and
+        # "not in" over "in". Operator words may be separated by any run of
+        # whitespace; the match is case-insensitive.
+        for op_key in sorted(self.operators, key=len, reverse=True):
+            op_regex = r'\s+'.join(re.escape(word) for word in op_key.split())
+            pattern = re.compile(rf'^(.*?)\s+{op_regex}\b\s*(.*)$', re.IGNORECASE)
+            match = pattern.match(text)
+            if not match:
+                continue
+
+            column = match.group(1).strip()
+            value_text = match.group(2).strip()
+            operator = self.operators[op_key]
+
+            # Null checks take no operand.
+            if operator in ('isnull', 'notnull'):
+                return column, operator, None
+
+            return column, operator, self._parse_value(value_text)
+
+        raise ValueError(f"Could not parse rule: {rule_text}")
     
     def _parse_value(self, value_text):
         """Interpret the value portion of a rule.
@@ -126,6 +126,46 @@ class FilterRuleParser:
             # Return as string
             return value
 
+def rule_to_query(column, operator, value):
+    """Translate a parsed rule into a pandas ``DataFrame.query`` expression.
+
+    Parameters
+    ----------
+    column : str
+        DataFrame column name.
+    operator : str
+        Operator symbol/keyword produced by :meth:`FilterRuleParser.parse_rule`.
+    value : object
+        Parsed operand (``None`` for null checks, a two-element sequence for
+        ``between``, a list for ``in``/``not in``, otherwise a scalar).
+
+    Returns
+    -------
+    str
+        A query fragment such as ``"NumMentions >= 5"``. String operands are
+        quoted via :func:`repr` so bare codes like ``US`` are not mistaken for
+        variable names by the query engine.
+    """
+    if operator in ('>', '>=', '<', '<=', '==', '!='):
+        return f"{column} {operator} {value!r}"
+    if operator == 'in':
+        return f"{column} in {value!r}"
+    if operator == 'not in':
+        return f"{column} not in {value!r}"
+    if operator == 'isnull':
+        return f"{column}.isnull()"
+    if operator == 'notnull':
+        return f"{column}.notnull()"
+    if operator == 'between':
+        low, high = value
+        return f"{low!r} <= {column} <= {high!r}"
+    if operator == 'contains':
+        return f"{column}.str.contains({value!r}, case=False, na=False)"
+    if operator == 'not contains':
+        return f"~{column}.str.contains({value!r}, case=False, na=False)"
+    raise ValueError(f"Unsupported operator: {operator}")
+
+
 def create_filter_function(filter_rules):
     """Build a ``DataFrame`` filtering function from text rules.
 
@@ -133,8 +173,8 @@ def create_filter_function(filter_rules):
     ----------
     filter_rules : dict
         Mapping of rule names to rule configurations. Each rule configuration
-        must contain a ``"rule"`` key with the textual rule and may include a
-        ``"description"`` and ``"enabled"`` flag.
+        must contain a ``"rule"`` key with the textual rule and may include an
+        ``"enabled"`` flag.
 
     Returns
     -------
@@ -143,100 +183,65 @@ def create_filter_function(filter_rules):
         returns the filtered frame.
     """
     parser = FilterRuleParser()
-    
+
     def filter_events(df):
         original_len = len(df)
-        
+
         for rule_name, rule_config in filter_rules.items():
             if not rule_config.get('enabled', True):
                 continue
-            
+
             rule_text = rule_config['rule']
-            description = rule_config.get('description', '')
-            
+
             try:
                 column, operator, value = parser.parse_rule(rule_text)
-                
-                # Apply filter based on operator
-                if column in df.columns:
-                    if operator == '>':
-                        df = df[df[column] > value]
-                    elif operator == '>=':
-                        df = df[df[column] >= value]
-                    elif operator == '<':
-                        df = df[df[column] < value]
-                    elif operator == '<=':
-                        df = df[df[column] <= value]
-                    elif operator == '==':
-                        df = df[df[column] == value]
-                    elif operator == '!=':
-                        df = df[df[column] != value]
-                    elif operator == 'contains':
-                        df = df[df[column].str.contains(value, case=False, na=False)]
-                    elif operator == 'not contains':
-                        df = df[~df[column].str.contains(value, case=False, na=False)]
-                    elif operator == 'in':
-                        df = df[df[column].isin(value)]
-                    elif operator == 'not in':
-                        df = df[~df[column].isin(value)]
-                    elif operator == 'isnull':
-                        df = df[df[column].isnull()]
-                    elif operator == 'notnull':
-                        df = df[df[column].notna()]
-                    elif operator == 'between':
-                        df = df[(df[column] >= value[0]) & (df[column] <= value[1])]
-                    
-                    if description:
-                        print(f"    Applied: {description}")
-                else:
+
+                if column not in df.columns:
                     print(f"    Warning: Column {column} not found for rule: {rule_name}")
-            
+                    continue
+
+                df = df.query(rule_to_query(column, operator, value), engine='python')
+                print(f"    Applied {rule_name}: {rule_text}")
+
             except Exception as e:
                 print(f"    Error applying rule {rule_name}: {e}")
-        
+
         filtered_len = len(df)
         if original_len > 0:
             print(f"    Filtered: {original_len} → {filtered_len} events ({filtered_len/original_len*100:.1f}% kept)")
-        
+
         return df
-    
+
     return filter_events
 
 # Default filter configuration used when none is provided.
 DEFAULT_FILTER_RULES = {
     "high_mention_events": {
         "rule": "NumMentions greater than or equal 5",
-        "description": "Keep only events with 5+ mentions",
         "enabled": True,
     },
     "has_location": {
         "rule": "ActionGeo_Lat is not null",
-        "description": "Keep only events with geographic coordinates",
         "enabled": True,
     },
     "has_actors": {
         "rule": "Actor1Name is not null",
-        "description": "Keep only events with identified actors",
         "enabled": True,
     },
     "goldstein_range": {
         "rule": "GoldsteinScale between -10 and 10",
-        "description": "Keep events with moderate Goldstein scale",
         "enabled": True,
     },
     "specific_countries": {
         "rule": "ActionGeo_CountryCode in [US, UK, FR, DE, CN]",
-        "description": "Keep only events in specific countries",
         "enabled": False,
     },
     "exclude_event_types": {
         "rule": "EventRootCode not in [20, 21, 22, 23]",
-        "description": "Exclude certain event types",
         "enabled": False,
     },
     "recent_sources": {
         "rule": "NumSources greater than 2",
-        "description": "Keep events with multiple sources",
         "enabled": True,
     },
 }
@@ -280,22 +285,18 @@ def save_filter_rules_template(filepath='filter_rules_template.yaml'):
         "filter_rules": {
             "high_mention_events": {
                 "rule": "NumMentions greater than or equal 5",
-                "description": "Keep only events with 5+ mentions",
                 "enabled": True
             },
             "has_location": {
                 "rule": "ActionGeo_Lat is not null",
-                "description": "Keep only events with geographic coordinates",
                 "enabled": True
             },
             "tone_filter": {
                 "rule": "AvgTone between -15 and 15",
-                "description": "Remove extreme tone outliers",
                 "enabled": False
             },
             "country_filter": {
                 "rule": "ActionGeo_CountryCode in [US, UK, FR]",
-                "description": "Keep only specific countries",
                 "enabled": False
             }
         },
@@ -554,11 +555,9 @@ def interactive_filter_builder():
             print("  GoldsteinScale between -5 and 5")
             
             rule = input("Filter rule: ").strip()
-            desc = input("Description (optional): ").strip()
-            
+
             filters[name] = {
                 'rule': rule,
-                'description': desc,
                 'enabled': True
             }
             

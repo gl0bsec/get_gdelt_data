@@ -127,26 +127,24 @@ EXTENDED_HELP = textwrap.dedent("""\
         not contains              Actor1Name not contains military
         in                        ActionGeo_CountryCode in [US, UK, FR]
         not in                    EventRootCode not in [20, 21, 22, 23]
-        is null                   Actor2Name is null _
-        is not null               ActionGeo_Lat is not null _
+        is null                   Actor2Name is null
+        is not null               ActionGeo_Lat is not null
         between                   GoldsteinScale between -5 and 5
 
-      Note: 'is null' and 'is not null' require a trailing placeholder
-      value (e.g. '_') to satisfy the parser's column-operator-value
-      pattern, but the value itself is ignored.
+      Note: 'is null' and 'is not null' take no operand. A trailing
+      placeholder value (e.g. '_') is still accepted for backward
+      compatibility but is ignored.
 
     ─── FILTER FILE FORMAT ─────────────────────────────────────────
       Filters are defined in YAML or JSON. Each rule has a name, rule
-      text, optional description, and an enabled flag:
+      text, and an enabled flag:
 
         filter_rules:
           high_mentions:
             rule: "NumMentions greater than or equal 5"
-            description: "Keep events with 5+ mentions"
             enabled: true
           country_filter:
             rule: "ActionGeo_CountryCode in [US, UK, FR]"
-            description: "Limit to selected countries"
             enabled: false
 
       Run 'python -m gdelt_data template' to generate a full example.
@@ -262,9 +260,9 @@ FILTER_OPERATORS = {
                               'Keep events in US, UK, or France'),
     'not in':                ('EventRootCode not in [20, 21, 22, 23]',
                               'Exclude unconventional mass violence events'),
-    'is null':               ('Actor2Name is null _',
+    'is null':               ('Actor2Name is null',
                               'Keep events with no second actor'),
-    'is not null':           ('ActionGeo_Lat is not null _',
+    'is not null':           ('ActionGeo_Lat is not null',
                               'Keep events with geo-coordinates'),
     'between':               ('GoldsteinScale between -5 and 5',
                               'Keep moderate-impact events'),
@@ -305,8 +303,6 @@ def _cmd_filters(_args):
         status = "ENABLED" if rule.get('enabled', True) else "DISABLED"
         print(f"  [{status:>8}]  {name}")
         print(f"             Rule:  {rule['rule']}")
-        if rule.get('description'):
-            print(f"             Desc:  {rule['description']}")
         print()
 
 
